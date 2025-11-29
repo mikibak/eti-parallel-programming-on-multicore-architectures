@@ -1,6 +1,3 @@
-/*
-CUDA - prepare the histogram of N numbers in range of <a;b> where a and b should be integers
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
@@ -11,10 +8,10 @@ void errorexit(const char *s) {
     exit(EXIT_FAILURE);	 	
 }
 
-__global__ void computeHistogram(int *data, int *histogram, int N) {
+__global__ void computeAverage(int *data, int *sum, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
-        atomicAdd(&histogram[data[idx]], 1);
+        atomicAdd(sum, data[idx]);
     }
 }
 
@@ -55,11 +52,10 @@ int main(int argc,char **argv) {
 
 	printf("The kernel will run with: %d blocks\n", blocksingrid);
 
-	int *resultArrayHost, *resultArrayDevice, *randomNumbersDevice;
+    int *sumHost, *sumDevice, *randomNumbersDevice;
 
-	resultArrayHost = (int *)calloc((B-A), sizeof(int));
-
-	if (resultArrayHost == NULL) {
+    sumHost = (int *)calloc(1, sizeof(int));
+    if (sumHost == NULL) {
         printf("Memory allocation failed.\n");
         return 1;
     }
@@ -68,17 +64,15 @@ int main(int argc,char **argv) {
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-	cudaMalloc((void **)&randomNumbersDevice, N * sizeof(int));
-    cudaMalloc((void **)&resultArrayDevice, (B-A+1) * sizeof(int));
+    cudaMalloc((void **)&randomNumbersDevice, N * sizeof(int));
+    cudaMalloc((void **)&sumDevice, sizeof(int));
 
     cudaMemcpy(randomNumbersDevice, randomNumbers, N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemset(sumDevice, 0, sizeof(int));
 
-    cudaMemset(resultArrayDevice, 0, (B-A+1) * sizeof(int));
+    computeAverage<<<blocksingrid, threadsinblock>>>(randomNumbersDevice, sumDevice, N);
 
-    computeHistogram<<<blocksingrid, threadsinblock>>>(randomNumbersDevice, resultArrayDevice, N);
-
-    cudaMemcpy(resultArrayHost, resultArrayDevice, (B-A+1) * sizeof(int), cudaMemcpyDeviceToHost);
-
+    cudaMemcpy(sumHost, sumDevice, sizeof(int), cudaMemcpyDeviceToHost);
 
     cudaEventRecord(stop, 0);
 
@@ -86,22 +80,15 @@ int main(int argc,char **argv) {
 
     cudaEventElapsedTime(&milliseconds, start, stop);
 
+    double average = (double) *sumHost / N;
 
-    printf("Histogram:\n");
-    int assertion = 0;
-    for (int i = 0; i <= B-A; i++) {
-        printf("%d occures %d\n", i, resultArrayHost[i]);
-        assertion += resultArrayHost[i];
-    }
-    printf("Total numbers=%d \n",assertion);
-
-
-	printf("Kernel execution time: %.3f ms\n", milliseconds);
+    printf("Average value = %.3f\n", average);
+    printf("Kernel execution time: %.3f ms\n", milliseconds);
 
     free(randomNumbers);
-    free(resultArrayHost);
+    free(sumHost);
     cudaFree(randomNumbersDevice);
-    cudaFree(resultArrayDevice);
+    cudaFree(sumDevice);
 
     return 0;
 
