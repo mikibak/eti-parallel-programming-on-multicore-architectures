@@ -73,7 +73,6 @@ int main(int argc,char **argv) {
 
 	printf("The kernel will run with: %d blocks\n", blocksingrid);
 
-	int *resultArrayHost, *resultArrayDevice, *randomNumbersDevice;
     int *sumHost, *sumDevice, *randomNumbersDevice;
 
     sumHost = (int *)malloc(sizeof(int));
