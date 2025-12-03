@@ -14,9 +14,6 @@ __global__ void computeAverageSharedMemory(int *data, int *globalSum, int N) {
     int threadId = threadIdx.x;
     int globalId = blockIdx.x * blockDim.x + threadId;
 
-    sharedData[threadId] = 0;
-    __syncthreads();
-
     if (globalId < N) {
         sharedData[threadId] = data[globalId];
     }
