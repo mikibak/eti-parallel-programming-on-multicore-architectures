@@ -1,9 +1,12 @@
 /*
-CUDA - generation of array of N elements and calculates even and odd numbers occurence - with streams
+CUDA - generation of array of N elements and calculates histogram - with streams
 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
+
+using idx_t = int;
+using count_t = unsigned long long;  // histogram counter type
 
 #define DEBUG 0
 __host__
@@ -12,150 +15,136 @@ void errorexit(const char *s) {
     exit(EXIT_FAILURE);   
 }
 
-__host__ 
-void generate(int *matrix, int matrixSize) {
-  srand(time(NULL));
-  for(int i=0; i<matrixSize; i++) {
-    matrix[i] = rand()%1000;
-  }
+__host__
+void generate(int *matrix, int matrixSize, int A, int B) {
+    srand(time(NULL));
+    for (int i = 0; i < matrixSize; i++) {
+        matrix[i] = A + rand() % (B - A + 1);
+    }
 }
 
-__global__ 
-void calculation(int *matrix, int *even, int *odd, int matrixSize, int startIdx, int endIdx) {
-    int my_index=blockIdx.x*blockDim.x+threadIdx.x+startIdx;
+__global__
+void histogramKernel(const int *matrix, count_t *hist, idx_t startIdx, idx_t endIdx, int A) {
+    idx_t my_index = blockIdx.x * blockDim.x + threadIdx.x + startIdx;
 
-    if(my_index < endIdx) {
-      if(matrix[my_index] % 2) {
-        atomicAdd(odd, 1);
-      } else {
-        atomicAdd(even, 1);
-      }
-    } 
+    if (my_index < endIdx) {
+        int value = matrix[my_index];
+        atomicAdd(&hist[value - A], 1LL);
+    }
 }
 
-int main(int argc,char **argv) {
+int main(int argc, char **argv) {
 
-  ///define number of streams
-  int numberOfStreams = 4;
-  cudaEvent_t start, stop;
-  float milliseconds = 0;
-  //define array size and allocate memory on host
-  int matrixSize=10000000;
-  int *hMatrix=(int*)malloc(matrixSize*sizeof(int));
+    /// define number of streams
+    int numberOfStreams = 4;
+    cudaEvent_t start, stop;
+    float milliseconds = 0;
 
-  //get number of chunks to operate per stream
-  int chunkSize = matrixSize/numberOfStreams;
-  int remainder = matrixSize % numberOfStreams;
+    // histogram range
+    int A = 0;
+    int B = 100;
+    int range = B - A + 1;
 
-  printf("Stream chunk is %d \n", chunkSize);
- 
-  //define kernel size per stream
-  int threadsinblock=1024;
-  
-  //allocate memory for odd and even numbers counters - host
-  int *hEven=(int*)malloc(sizeof(int));
-  int *hOdd=(int*)malloc(sizeof(int));
+    // define array size
+    int matrixSize = 10000000;
 
+    // allocate memory on host
+    int *hMatrix = (int*)malloc(matrixSize * sizeof(int));
+    count_t *hHist = (count_t*)calloc(range, sizeof(count_t));
 
-  //create streams
-  cudaStream_t streams[numberOfStreams];
-  for(int i=0;i<numberOfStreams;i++) {
-      if (cudaSuccess!=cudaStreamCreate(&streams[i]))
-           errorexit("Error creating stream");
+    if (!hMatrix || !hHist)
+        errorexit("Host memory allocation failed");
+
+    // compute chunk size
+    int chunkSize = matrixSize / numberOfStreams;
+    int remainder = matrixSize % numberOfStreams;
+
+    printf("Stream chunk is %d\n", chunkSize);
+
+    int threadsinblock = 1024;
+
+    // create streams
+    cudaStream_t streams[numberOfStreams];
+    for (int i = 0; i < numberOfStreams; i++) {
+        if (cudaSuccess != cudaStreamCreate(&streams[i]))
+            errorexit("Error creating stream");
     }
 
-  //allocate memory for odd and even numbers counters and array on device and for array on host with cudaMallocHost
-  int *dEven=NULL;
-  int *dOdd=NULL;
-  int *dMatrix=NULL;
+    int *dMatrix = NULL;
+    count_t *dHist = NULL;
 
+    // pinned host memory
+    if (cudaSuccess != cudaMallocHost((void**)&hMatrix, matrixSize * sizeof(int)))
+        errorexit("Error allocating pinned memory");
 
+    // generate input data
+    generate(hMatrix, matrixSize, A, B);
 
-  if (cudaSuccess!=cudaMallocHost((void **) &hMatrix, matrixSize*sizeof(int)))
-      errorexit("Error allocating memory on the CPU");
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
 
-  //generate random numbers
-  generate(hMatrix, matrixSize);
+    // allocate device memory
+    if (cudaSuccess != cudaMalloc((void**)&dMatrix, matrixSize * sizeof(int)))
+        errorexit("Error allocating dMatrix");
 
-  if(DEBUG) {
-    printf("Generated numbers: \n");
-    for(int i=0; i<matrixSize; i++) {
-      printf("%d ", hMatrix[i]);
+    if (cudaSuccess != cudaMalloc((void**)&dHist, range * sizeof(count_t)))
+        errorexit("Error allocating dHist");
+
+    if (cudaSuccess != cudaMemset(dHist, 0, range * sizeof(count_t)))
+        errorexit("Error memset histogram");
+
+    int offset = 0;
+    // per-stream kernel launches
+    for (int i = 0; i < numberOfStreams; i++) {
+
+        int streamChunk = chunkSize + (i < remainder ? 1 : 0);
+        int blocksingrid = (streamChunk + threadsinblock - 1) / threadsinblock;
+
+        int startIdx = offset;
+        int endIdx = startIdx + streamChunk;
+
+        cudaMemcpyAsync(&dMatrix[offset], &hMatrix[offset],
+                        streamChunk * sizeof(int), cudaMemcpyHostToDevice, streams[i]);
+
+        histogramKernel<<<blocksingrid, threadsinblock, 0, streams[i]>>>(
+            dMatrix, dHist, startIdx, endIdx, A
+        );
+
+        offset += streamChunk;
     }
-    printf("\n");
-  }
 
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  cudaEventRecord(start, 0);
+    cudaDeviceSynchronize();
 
-  if (cudaSuccess!=cudaMalloc((void **)&dEven,sizeof(int)))
-      errorexit("Error allocating memory on the GPU");
+    // copy histogram back
+    if (cudaSuccess != cudaMemcpy(hHist, dHist, range * sizeof(count_t), cudaMemcpyDeviceToHost))
+        errorexit("Error copying histogram back");
 
-  if (cudaSuccess!=cudaMalloc((void **)&dOdd,sizeof(int)))
-      errorexit("Error allocating memory on the GPU");
-  
-  if (cudaSuccess!=cudaMalloc((void **)&dMatrix,matrixSize*sizeof(int)))
-      errorexit("Error allocating memory on the GPU");
-
-  //initialize allocated counters with 0
-  if (cudaSuccess!=cudaMemset(dEven,0, sizeof(int)))
-      errorexit("Error initializing memory on the GPU");
-
-  if(cudaSuccess!=cudaMemset(dOdd,0, sizeof(int)))
-      errorexit("Error initializing memory on the GPU");
-
-  int offset = 0;
-  //execute operation in each stream - copy chunk of data and run calculations
-  for(int i=0; i<numberOfStreams; i++) {
-    int streamChunk = chunkSize + (i<remainder ? 1 : 0);
-    int blocksingrid=(streamChunk + threadsinblock - 1) / threadsinblock;
-
-    int startIdx = offset;
-    int endIdx = startIdx + streamChunk;
-    cudaMemcpyAsync(&dMatrix[offset],&hMatrix[offset],streamChunk*sizeof(int),cudaMemcpyHostToDevice, streams[i]);      
-    calculation<<<blocksingrid, threadsinblock, 0, streams[i]>>>(dMatrix, dEven, dOdd, matrixSize, startIdx, endIdx);
-
-    offset += streamChunk;
-  }
-
-  cudaDeviceSynchronize();
-
-  //copy results from GPU
-  if (cudaSuccess!=cudaMemcpy(hEven, dEven, sizeof(int),cudaMemcpyDeviceToHost))
-     errorexit("Error copying results");
-
-  if (cudaSuccess!=cudaMemcpy(hOdd, dOdd, sizeof(int),cudaMemcpyDeviceToHost))
-     errorexit("Error copying results");
-  
     cudaEventRecord(stop, 0);
-
-    // Wait for the stop event to finish
     cudaEventSynchronize(stop);
-
-    // Calculate elapsed time
     cudaEventElapsedTime(&milliseconds, start, stop);
 
-    printf("Found %d even numbers \n", *hEven);
-    printf("Found %d odd numbers \n", *hOdd);
-    printf("Found %d total numbers \n", *hEven + *hOdd);
+    // print histogram
+    printf("\nHistogram:\n");
+    count_t total = 0;
+    for (int i = 0; i < range; i++) {
+        printf("Value %d occurs %llu times\n", A + i, hHist[i]);
+        total += hHist[i];
+    }
+    printf("\nTotal numbers counted: %llu\n", total);
     printf("Kernel execution time: %.3f ms\n", milliseconds);
-  
-  //Free memory and destroy streams
-    for(int i=0;i<numberOfStreams;i++) {
-      if (cudaSuccess!=cudaStreamDestroy(*(streams+i)))
-         errorexit("Error creating stream");
+
+    // cleanup
+    for (int i = 0; i < numberOfStreams; i++) {
+        if (cudaSuccess != cudaStreamDestroy(streams[i]))
+            errorexit("Error destroying stream");
     }
 
-  free(hOdd);
-  free(hEven);
-  
-  if (cudaSuccess!=cudaFreeHost(hMatrix))
-     errorexit("Error when deallocating space on the CPU");
-  if (cudaSuccess!=cudaFree(dEven))
-    errorexit("Error when deallocating space on the GPU");
-  if (cudaSuccess!=cudaFree(dOdd))
-    errorexit("Error when deallocating space on the GPU");
-  if (cudaSuccess!=cudaFree(dMatrix))
-    errorexit("Error when deallocating space on the GPU");
+    free(hHist);
+
+    if (cudaSuccess != cudaFreeHost(hMatrix)) errorexit("Error freeing pinned host memory");
+    if (cudaSuccess != cudaFree(dHist)) errorexit("Error freeing dHist");
+    if (cudaSuccess != cudaFree(dMatrix)) errorexit("Error freeing dMatrix");
+
+    return 0;
 }
