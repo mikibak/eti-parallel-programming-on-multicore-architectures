@@ -1,9 +1,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <cuda.h>
 
-#define BLOCK_SIZE 1024
-#define ELEMENTS_PER_BLOCK 2048
+#define BLOCK_SIZE 1024          // Threads per block
+#define ELEMENTS_PER_BLOCK 2048  // Elements sorted per block
 
 using idx_t = int;
 
@@ -19,23 +20,17 @@ bool checkSorted(int* arr, idx_t n)
 }
 
 // ================================================================
-// Device function: merge two sorted subarrays in shared memory
-// ================================================================
+// Device merge function (ping-pong)
 __device__ void mergeShared(int* src, int* dst, idx_t start, idx_t mid, idx_t end)
 {
-    idx_t i = start;
-    idx_t j = mid + 1;
-    idx_t k = start;
-
-    while (i <= mid && j <= end)
-        dst[k++] = (src[i] <= src[j]) ? src[i++] : src[j++];
-
+    idx_t i = start, j = mid + 1, k = start;
+    while (i <= mid && j <= end) dst[k++] = (src[i] <= src[j]) ? src[i++] : src[j++];
     while (i <= mid) dst[k++] = src[i++];
     while (j <= end) dst[k++] = src[j++];
 }
 
 // ================================================================
-// Kernel: parallel in-block iterative merge with ping-pong
+// Kernel: in-block merge using shared memory ping-pong
 // ================================================================
 __global__ void mergeSortInBlock(int* array, idx_t n)
 {
@@ -46,75 +41,67 @@ __global__ void mergeSortInBlock(int* array, idx_t n)
     if (blockStart >= n) return;
 
     idx_t tid = threadIdx.x;
+    idx_t blockSize = min(ELEMENTS_PER_BLOCK, n - blockStart);
 
-    // Copy block to shared memory (ping)
-    for (idx_t i = tid; i < ELEMENTS_PER_BLOCK; i += blockDim.x)
-        ping[i] = (blockStart + i < n) ? array[blockStart + i] : INT_MAX;
-
+    // Load to shared memory
+    for (idx_t i = tid; i < blockSize; i += blockDim.x)
+        ping[i] = array[blockStart + i];
     __syncthreads();
 
     int* src = ping;
     int* dst = pong;
 
     // Iterative merge
-    for (idx_t size = 2; size <= ELEMENTS_PER_BLOCK; size <<= 1)
+    for (idx_t size = 2; size <= blockSize; size <<= 1)
     {
-        idx_t numIntervals = ELEMENTS_PER_BLOCK / size;
+        idx_t numIntervals = (blockSize + size - 1) / size;
         idx_t intervalId = tid;
         if (intervalId < numIntervals)
         {
             idx_t start = intervalId * size;
-            idx_t mid   = start + size / 2 - 1;
-            idx_t end   = start + size - 1;
+            idx_t mid   = min(start + size / 2 - 1, blockSize - 1);
+            idx_t end   = min(start + size - 1, blockSize - 1);
             mergeShared(src, dst, start, mid, end);
         }
         __syncthreads();
-
-        // Swap buffers
-        int* tmp = src;
-        src = dst;
-        dst = tmp;
+        int* tmp = src; src = dst; dst = tmp;
     }
 
-    // Copy back to global memory
-    for (idx_t i = tid; i < ELEMENTS_PER_BLOCK; i += blockDim.x)
-        if (blockStart + i < n)
-            array[blockStart + i] = src[i];
+    // Copy back
+    for (idx_t i = tid; i < blockSize; i += blockDim.x)
+        array[blockStart + i] = src[i];
 }
 
 // ================================================================
-// Kernel: parallel merge sorted blocks in global memory
+// Kernel: merge multiple block intervals in global memory
 // ================================================================
-__global__ void mergeBlocks(int* array, int* temp, idx_t n)
+__global__ void mergeBlockPairs(int* array, int* temp, idx_t n, idx_t intervalBlocks)
 {
+    idx_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    idx_t blocksPerMerge = intervalBlocks * 2;
     idx_t numBlocks = (n + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK;
-    idx_t tid = threadIdx.x;
 
-    // Each thread handles one pair of blocks per iteration
-    for (idx_t size = 1; size < numBlocks; size <<= 1)
-    {
-        idx_t startBlock = tid * (size * 2);
-        if (startBlock + size < numBlocks)
-        {
-            idx_t l   = startBlock * ELEMENTS_PER_BLOCK;
-            idx_t mid = l + size * ELEMENTS_PER_BLOCK - 1;
-            idx_t r   = l + 2 * size * ELEMENTS_PER_BLOCK - 1;
-            if (r >= n) r = n - 1;
+    idx_t startMerge = tid * blocksPerMerge;
+    if (startMerge >= numBlocks) return;
 
-            idx_t i = l, j = mid + 1, k = l;
-            while (i <= mid && j <= r)
-                temp[k++] = (array[i] <= array[j]) ? array[i++] : array[j++];
-            while (i <= mid) temp[k++] = array[i++];
-            while (j <= r)   temp[k++] = array[j++];
-            for (idx_t t = l; t <= r; t++)
-                array[t] = temp[t];
-        }
-        __syncthreads();
-    }
+    idx_t lBlock = startMerge;
+    idx_t rBlock = min(startMerge + intervalBlocks, numBlocks);
+
+    idx_t l = lBlock * ELEMENTS_PER_BLOCK;
+    idx_t mid = min(rBlock * ELEMENTS_PER_BLOCK, n) - 1;
+    idx_t r = min((startMerge + blocksPerMerge) * ELEMENTS_PER_BLOCK, n) - 1;
+
+    if (l > mid || mid >= r) return;
+
+    idx_t i = l, j = mid + 1, k = l;
+    while (i <= mid && j <= r) temp[k++] = (array[i] <= array[j]) ? array[i++] : array[j++];
+    while (i <= mid) temp[k++] = array[i++];
+    while (j <= r) temp[k++] = array[j++];
+    for (idx_t t = l; t <= r; t++) array[t] = temp[t];
 }
 
 // ================================================================
-// Host function: run GPU merge sort with total timing
+// Host function: GPU merge sort
 // ================================================================
 void mergeSort_gpu(int* d_array, idx_t n)
 {
@@ -122,28 +109,38 @@ void mergeSort_gpu(int* d_array, idx_t n)
     size_t sharedMemSize = ELEMENTS_PER_BLOCK * sizeof(int);
 
     cudaEvent_t start, stop;
-    float elapsedTime = 0.0f;
-
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-
     cudaEventRecord(start);
 
-    // Phase 1: parallel in-block merge
+    // Phase 1: in-block merge
     mergeSortInBlock<<<numBlocks, BLOCK_SIZE, sharedMemSize>>>(d_array, n);
     cudaDeviceSynchronize();
 
-    // Phase 2: merge sorted blocks
+    // Phase 2: merge blocks iteratively
     int* d_temp;
     cudaMalloc(&d_temp, n * sizeof(int));
-    mergeBlocks<<<1, numBlocks>>>(d_array, d_temp, n);
-    cudaDeviceSynchronize();
+
+    idx_t intervalBlocks = 1; // start merging 2 blocks
+    while (intervalBlocks < numBlocks)
+    {
+        idx_t merges = (numBlocks + intervalBlocks * 2 - 1) / (intervalBlocks * 2); // ceil division
+        idx_t threadsPerBlock = 1024;
+        idx_t blocksPerGrid = (merges + threadsPerBlock - 1) / threadsPerBlock;
+
+        mergeBlockPairs<<<blocksPerGrid, threadsPerBlock>>>(d_array, d_temp, n, intervalBlocks);
+        cudaDeviceSynchronize();
+
+        intervalBlocks *= 2;
+    }
+
     cudaFree(d_temp);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&elapsedTime, start, stop);
 
+    float elapsedTime;
+    cudaEventElapsedTime(&elapsedTime, start, stop);
     printf("Total GPU merge sort time: %.3f ms\n", elapsedTime);
 
     cudaEventDestroy(start);
