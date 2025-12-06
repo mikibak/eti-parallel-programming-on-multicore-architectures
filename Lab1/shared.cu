@@ -8,11 +8,11 @@ void errorexit(const char *s) {
     exit(EXIT_FAILURE);	 	
 }
 
-__global__ void computeAverageSharedMemory(int *data, int *globalSum, int N) {
-    extern __shared__ int sharedData[];
+__global__ void computeAverageSharedMemory(long long unsigned int *data, long long unsigned int *globalSum, long long unsigned int N) {
+    extern __shared__ long long unsigned int sharedData[];
 
-    int threadId = threadIdx.x;
-    int globalId = blockIdx.x * blockDim.x + threadId;
+    long long unsigned int threadId = threadIdx.x;
+    long long unsigned int globalId = blockIdx.x * blockDim.x + threadId;
 
     if (globalId < N) {
         sharedData[threadId] = data[globalId];
@@ -20,7 +20,7 @@ __global__ void computeAverageSharedMemory(int *data, int *globalSum, int N) {
     __syncthreads();
 
     // Reduce inside block
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    for (long long unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
         if (threadId < stride) {
             sharedData[threadId] += sharedData[threadId + stride];
         }
@@ -33,11 +33,11 @@ __global__ void computeAverageSharedMemory(int *data, int *globalSum, int N) {
     }
 }
 
-void generateRandomNumbers(int *arr, int N, int A, int B) {
+void generateRandomNumbers(long long unsigned int *arr, long long unsigned int N, long long unsigned int A, long long unsigned int B) {
     
 	srand(time(NULL));
 
-    for (int i = 0; i < N; i++) {
+    for (long long unsigned int i = 0; i < N; i++) {
         arr[i] = A + rand() % (B - A + 1);
     }
 
@@ -45,20 +45,20 @@ void generateRandomNumbers(int *arr, int N, int A, int B) {
 
 int main(int argc,char **argv) {
 
-    int threadsinblock=1024;
-    int blocksingrid;
+    long long unsigned int threadsinblock=1024;
+    long long unsigned int blocksingrid;
 
-    int N;
-    int A = 0;
-    int B = 100;
+    long long unsigned int N;
+    long long unsigned int A = 0;
+    long long unsigned int B = 100;
     cudaEvent_t start, stop;
     float milliseconds = 0;
 
     printf("Enter number of elements: \n");
-    scanf("%d", &N);
+    scanf("%lld", &N);
 
 
-	int *randomNumbers = (int *)malloc(N * sizeof(int));
+	long long unsigned int *randomNumbers = (long long unsigned int *)malloc(N * sizeof(long long unsigned int));
     if (randomNumbers == NULL) {
         printf("Memory allocation failed.\n");
         return 1;
@@ -68,28 +68,28 @@ int main(int argc,char **argv) {
 
 	blocksingrid = ceil((double)N/threadsinblock);
 
-	printf("The kernel will run with: %d blocks\n", blocksingrid);
+	printf("The kernel will run with: %lld blocks\n", blocksingrid);
 
-    int *sumHost, *sumDevice, *randomNumbersDevice;
+    long long unsigned int *sumHost, *sumDevice, *randomNumbersDevice;
 
-    sumHost = (int *)malloc(sizeof(int));
+    sumHost = (long long unsigned int *)malloc(sizeof(long long unsigned int));
     *sumHost = 0;
 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-    cudaMalloc((void **)&randomNumbersDevice, N * sizeof(int));
-    cudaMalloc((void **)&sumDevice, sizeof(int));
+    cudaMalloc((void **)&randomNumbersDevice, N * sizeof(long long unsigned int));
+    cudaMalloc((void **)&sumDevice, sizeof(long long unsigned int));
 
-    cudaMemcpy(randomNumbersDevice, randomNumbers, N * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemset(sumDevice, 0, sizeof(int));
+    cudaMemcpy(randomNumbersDevice, randomNumbers, N * sizeof(long long unsigned int), cudaMemcpyHostToDevice);
+    cudaMemset(sumDevice, 0, sizeof(long long unsigned int));
 
-    int sharedSize = threadsinblock * sizeof(int);
+    long long unsigned int sharedSize = threadsinblock * sizeof(long long unsigned int);
 
     computeAverageSharedMemory<<<blocksingrid, threadsinblock, sharedSize>>>(randomNumbersDevice, sumDevice, N);
 
-    cudaMemcpy(sumHost, sumDevice, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(sumHost, sumDevice, sizeof(long long unsigned int), cudaMemcpyDeviceToHost);
 
     cudaEventRecord(stop, 0);
 

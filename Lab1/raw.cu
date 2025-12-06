@@ -8,18 +8,18 @@ void errorexit(const char *s) {
     exit(EXIT_FAILURE);	 	
 }
 
-__global__ void computeAverage(int *data, int *sum, int N) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void computeAverage(long long unsigned int *data, long long unsigned int *sum, long long unsigned int N) {
+    long long unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
         atomicAdd(sum, data[idx]);
     }
 }
 
-void generateRandomNumbers(int *arr, int N, int A, int B) {
+void generateRandomNumbers(long long unsigned int *arr, long long unsigned int N, long long unsigned int A, long long unsigned int B) {
     
 	srand(time(NULL));
 
-    for (int i = 0; i < N; i++) {
+    for (long long unsigned int i = 0; i < N; i++) {
         arr[i] = A + rand() % (B - A +1);
     }
 
@@ -27,20 +27,20 @@ void generateRandomNumbers(int *arr, int N, int A, int B) {
 
 int main(int argc,char **argv) {
 
-    int threadsinblock=1024;
-    int blocksingrid;
+    long long unsigned int threadsinblock=1024;
+    long long unsigned int blocksingrid;
 
-    int N;
-    int A=0;
-    int B=100;
+    long long unsigned int N;
+    long long unsigned int A=0;
+    long long unsigned int B=100;
     
  	cudaEvent_t start, stop;
     float milliseconds = 0;
     
     printf("Enter number of elements: \n");
-    scanf("%d", &N);
+    scanf("%lld", &N);
 
-	int *randomNumbers = (int *)malloc(N * sizeof(int));
+	long long unsigned int *randomNumbers = (long long unsigned int *)malloc(N * sizeof(long long unsigned int));
     if (randomNumbers == NULL) {
         printf("Memory allocation failed.\n");
         return 1;
@@ -50,11 +50,11 @@ int main(int argc,char **argv) {
 
 	blocksingrid = ceil((double)N/threadsinblock);
 
-	printf("The kernel will run with: %d blocks\n", blocksingrid);
+	printf("The kernel will run with: %lld blocks\n", blocksingrid);
 
-    int *sumHost, *sumDevice, *randomNumbersDevice;
+    long long unsigned int *sumHost, *sumDevice, *randomNumbersDevice;
 
-    sumHost = (int *)calloc(1, sizeof(int));
+    sumHost = (long long unsigned int *)calloc(1, sizeof(long long unsigned int));
     if (sumHost == NULL) {
         printf("Memory allocation failed.\n");
         return 1;
@@ -64,15 +64,15 @@ int main(int argc,char **argv) {
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-    cudaMalloc((void **)&randomNumbersDevice, N * sizeof(int));
-    cudaMalloc((void **)&sumDevice, sizeof(int));
+    cudaMalloc((void **)&randomNumbersDevice, N * sizeof(long long unsigned int));
+    cudaMalloc((void **)&sumDevice, sizeof(long long unsigned int));
 
-    cudaMemcpy(randomNumbersDevice, randomNumbers, N * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemset(sumDevice, 0, sizeof(int));
+    cudaMemcpy(randomNumbersDevice, randomNumbers, N * sizeof(long long unsigned int), cudaMemcpyHostToDevice);
+    cudaMemset(sumDevice, 0, sizeof(long long unsigned int));
 
     computeAverage<<<blocksingrid, threadsinblock>>>(randomNumbersDevice, sumDevice, N);
 
-    cudaMemcpy(sumHost, sumDevice, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(sumHost, sumDevice, sizeof(long long unsigned int), cudaMemcpyDeviceToHost);
 
     cudaEventRecord(stop, 0);
 
