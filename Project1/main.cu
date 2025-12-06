@@ -114,7 +114,7 @@ __global__ void mergeBlocks(int* array, int* temp, idx_t n)
 }
 
 // ================================================================
-// Host function: run GPU merge sort with timing
+// Host function: run GPU merge sort with total timing
 // ================================================================
 void mergeSort_gpu(int* d_array, idx_t n)
 {
@@ -122,34 +122,29 @@ void mergeSort_gpu(int* d_array, idx_t n)
     size_t sharedMemSize = ELEMENTS_PER_BLOCK * sizeof(int);
 
     cudaEvent_t start, stop;
-    float timeInBlock = 0.0f, timeBlocks = 0.0f;
+    float elapsedTime = 0.0f;
 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // Phase 1: parallel in-block merge
     cudaEventRecord(start);
+
+    // Phase 1: parallel in-block merge
     mergeSortInBlock<<<numBlocks, BLOCK_SIZE, sharedMemSize>>>(d_array, n);
     cudaDeviceSynchronize();
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&timeInBlock, start, stop);
 
     // Phase 2: merge sorted blocks
     int* d_temp;
     cudaMalloc(&d_temp, n * sizeof(int));
-
-    cudaEventRecord(start);
     mergeBlocks<<<1, numBlocks>>>(d_array, d_temp, n);
     cudaDeviceSynchronize();
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&timeBlocks, start, stop);
-
     cudaFree(d_temp);
 
-    printf("In-block merge time: %.3f ms\n", timeInBlock);
-    printf("Block-level merge time: %.3f ms\n", timeBlocks);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsedTime, start, stop);
+
+    printf("Total GPU merge sort time: %.3f ms\n", elapsedTime);
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
@@ -160,7 +155,13 @@ void mergeSort_gpu(int* d_array, idx_t n)
 // ================================================================
 int main()
 {
-    const idx_t N = 1 << 15; // 32768 elements
+    idx_t N;
+    printf("Enter number of elements: ");
+    if (scanf("%d", &N) != 1 || N <= 0)
+    {
+        printf("Invalid input.\n");
+        return 1;
+    }
 
     int* h = (int*)malloc(N * sizeof(int));
     for (idx_t i = 0; i < N; i++) h[i] = rand();
