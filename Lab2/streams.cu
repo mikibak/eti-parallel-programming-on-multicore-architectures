@@ -45,8 +45,9 @@ int main(int argc, char **argv) {
     int B = 100;
     int range = B - A + 1;
 
-    // define array size
-    int matrixSize = 10000000;
+    int matrixSize;
+    printf("Enter number of elements:\n");
+    scanf("%d", &matrixSize);
 
     // allocate memory on host
     int *hMatrix = (int*)malloc(matrixSize * sizeof(int));
