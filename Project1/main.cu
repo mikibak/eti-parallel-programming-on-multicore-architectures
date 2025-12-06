@@ -21,44 +21,40 @@ bool checkSorted(int* arr, idx_t n)
 // ================================================================
 // Device function: merge two sorted subarrays in shared memory
 // ================================================================
-__device__ void mergeShared(int* sdata, idx_t start, idx_t mid, idx_t end, int* temp)
+__device__ void mergeShared(int* src, int* dst, idx_t start, idx_t mid, idx_t end)
 {
     idx_t i = start;
     idx_t j = mid + 1;
     idx_t k = start;
 
     while (i <= mid && j <= end)
-        temp[k++] = (sdata[i] <= sdata[j]) ? sdata[i++] : sdata[j++];
+        dst[k++] = (src[i] <= src[j]) ? src[i++] : src[j++];
 
-    while (i <= mid) temp[k++] = sdata[i++];
-    while (j <= end) temp[k++] = sdata[j++];
-
-    for (idx_t t = start; t <= end; t++)
-        sdata[t] = temp[t];
+    while (i <= mid) dst[k++] = src[i++];
+    while (j <= end) dst[k++] = src[j++];
 }
 
 // ================================================================
-// Kernel: parallel in-block iterative merge
+// Kernel: parallel in-block iterative merge with ping-pong
 // ================================================================
 __global__ void mergeSortInBlock(int* array, idx_t n)
 {
-    __shared__ int sdata[ELEMENTS_PER_BLOCK];
-    __shared__ int temp[ELEMENTS_PER_BLOCK];
+    __shared__ int ping[ELEMENTS_PER_BLOCK];
+    __shared__ int pong[ELEMENTS_PER_BLOCK];
 
     idx_t blockStart = blockIdx.x * ELEMENTS_PER_BLOCK;
     if (blockStart >= n) return;
 
     idx_t tid = threadIdx.x;
 
-    // Copy block to shared memory
+    // Copy block to shared memory (ping)
     for (idx_t i = tid; i < ELEMENTS_PER_BLOCK; i += blockDim.x)
-    {
-        if (blockStart + i < n)
-            sdata[i] = array[blockStart + i];
-        else
-            sdata[i] = INT_MAX;
-    }
+        ping[i] = (blockStart + i < n) ? array[blockStart + i] : INT_MAX;
+
     __syncthreads();
+
+    int* src = ping;
+    int* dst = pong;
 
     // Iterative merge
     for (idx_t size = 2; size <= ELEMENTS_PER_BLOCK; size <<= 1)
@@ -70,25 +66,31 @@ __global__ void mergeSortInBlock(int* array, idx_t n)
             idx_t start = intervalId * size;
             idx_t mid   = start + size / 2 - 1;
             idx_t end   = start + size - 1;
-            mergeShared(sdata, start, mid, end, temp);
+            mergeShared(src, dst, start, mid, end);
         }
         __syncthreads();
+
+        // Swap buffers
+        int* tmp = src;
+        src = dst;
+        dst = tmp;
     }
 
     // Copy back to global memory
     for (idx_t i = tid; i < ELEMENTS_PER_BLOCK; i += blockDim.x)
         if (blockStart + i < n)
-            array[blockStart + i] = sdata[i];
+            array[blockStart + i] = src[i];
 }
 
 // ================================================================
-// Kernel: merge sorted blocks in global memory
+// Kernel: parallel merge sorted blocks in global memory
 // ================================================================
 __global__ void mergeBlocks(int* array, int* temp, idx_t n)
 {
     idx_t numBlocks = (n + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK;
     idx_t tid = threadIdx.x;
 
+    // Each thread handles one pair of blocks per iteration
     for (idx_t size = 1; size < numBlocks; size <<= 1)
     {
         idx_t startBlock = tid * (size * 2);
