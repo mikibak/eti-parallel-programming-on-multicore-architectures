@@ -1,9 +1,10 @@
 /*
-CUDA - generation of array of N elements and calculates even and odd numbers occurence - no streams
+CUDA - generation of array of N elements and preparation of histogram.
 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
+#include <time.h>
 
 #define DEBUG 0
 __host__
@@ -12,112 +13,111 @@ void errorexit(const char *s) {
 		exit(EXIT_FAILURE);   
 }
 
-__host__ 
-void generate(int *matrix, int matrixSize) {
-	srand(time(NULL));
-	for(int i=0; i<matrixSize; i++) {
-		matrix[i] = rand()%1000;
-	}
+__host__
+void generateRandomNumbers(int *arr, int N, int A, int B) {
+    srand(time(NULL));
+    for (int i = 0; i < N; i++) {
+        arr[i] = A + rand() % (B - A + 1);
+    }
 }
 
-__global__ 
-void calculation(int *matrix, int *even, int *odd, int matrixSize) {
-		int my_index=blockIdx.x*blockDim.x+threadIdx.x;
-		if(my_index < matrixSize) {
-			if(matrix[my_index] % 2) {
-				atomicAdd(odd, 1);
-			} else {
-				atomicAdd(even, 1);
-			}
-		} 
+__global__
+void histogramKernel(int *data, int *hist, int N, int A) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx < N) {
+        int value = data[idx];
+        atomicAdd(&hist[value - A], 1);
+    }
 }
 
 int main(int argc,char **argv) {
 
-	//define array size and allocate memory on host
-	int matrixSize=10000000;
-	int *hMatrix=(int*)malloc(matrixSize*sizeof(int));
-	cudaEvent_t start, stop;
+    int N;
+    int A = 0;
+    int B = 100;
+
+    printf("Enter number of elements:\n");
+    scanf("%d", &N);
+
+    int range = B - A + 1;
+
+    // Allocate host memory
+    int *hData = (int*)malloc(N * sizeof(int));
+    int *hHist = (int*)calloc(range, sizeof(int));
+
+    if (!hData || !hHist)
+        errorexit("Host memory allocation failed");
+
+    // Generate random numbers
+    generateRandomNumbers(hData, N, A, B);
+
+    if (DEBUG) {
+        printf("Generated numbers:\n");
+        for (int i = 0; i < N; i++) printf("%d ", hData[i]);
+        printf("\n");
+    }
+
+    // Device pointers
+    int *dData = NULL;
+    int *dHist = NULL;
+
+    cudaEvent_t start, stop;
     float milliseconds = 0;
 
-	//generate random numbers
-	generate(hMatrix, matrixSize);
-
-	if(DEBUG) {
-		printf("Generated numbers: \n");
-		for(int i=0; i<matrixSize; i++) {
-			printf("%d ", hMatrix[i]);
-		}
-		printf("\n");
-	}
-
-	//allocate memory for odd and even numbers counters - host
-	int *hEven=(int*)malloc(sizeof(int));
-	int *hOdd=(int*)malloc(sizeof(int));
-
-	//allocate memory for odd and even numbers counters and array - device
-	int *dEven=NULL;
-	int *dOdd=NULL;
-	int *dMatrix=NULL;
-
-	cudaEventCreate(&start);
+    cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-	if (cudaSuccess!=cudaMalloc((void **)&dEven,sizeof(int)))
-			errorexit("Error allocating memory on the GPU");
+    // Allocate device memory
+    if (cudaSuccess != cudaMalloc((void**)&dData, N * sizeof(int)))
+        errorexit("Error allocating data array on GPU");
 
-	if (cudaSuccess!=cudaMalloc((void **)&dOdd,sizeof(int)))
-			errorexit("Error allocating memory on the GPU");
-	
-	if (cudaSuccess!=cudaMalloc((void **)&dMatrix,matrixSize*sizeof(int)))
-			errorexit("Error allocating memory on the GPU");
+    if (cudaSuccess != cudaMalloc((void**)&dHist, range * sizeof(int)))
+        errorexit("Error allocating histogram array on GPU");
 
-	//initialize allocated counters with 0
-	if (cudaSuccess!=cudaMemset(dEven,0, sizeof(int)))
-			errorexit("Error initializing memory on the GPU");
+    // Initialize histogram to zero
+    if (cudaSuccess != cudaMemset(dHist, 0, range * sizeof(int)))
+        errorexit("Error initializing histogram on GPU");
 
-	if(cudaSuccess!=cudaMemset(dOdd,0, sizeof(int)))
-			errorexit("Error initializing memory on the GPU");
+    // Copy data to device
+    if (cudaSuccess != cudaMemcpy(dData, hData, N * sizeof(int), cudaMemcpyHostToDevice))
+        errorexit("Error copying data to device");
 
-	//copy array to device
-	if (cudaSuccess!=cudaMemcpy(dMatrix,hMatrix,matrixSize*sizeof(int),cudaMemcpyHostToDevice))
-		 errorexit("Error copying input data to device");
+    int threadsinblock = 1024;
+    int blocksingrid = 1 + (N - 1) / threadsinblock;
 
-	int threadsinblock=1024;
-	int blocksingrid=1+((matrixSize-1)/threadsinblock); 
+    // Run kernel
+    histogramKernel<<<blocksingrid, threadsinblock>>>(dData, dHist, N, A);
 
-	//run kernel on GPU 
-	calculation<<<blocksingrid, threadsinblock>>>(dMatrix, dEven, dOdd, matrixSize);
+    // Copy histogram back to host
+    if (cudaSuccess != cudaMemcpy(hHist, dHist, range * sizeof(int), cudaMemcpyDeviceToHost))
+        errorexit("Error copying histogram back to host");
 
-	//copy results from GPU
-	if (cudaSuccess!=cudaMemcpy(hEven, dEven, sizeof(int),cudaMemcpyDeviceToHost))
-		 errorexit("Error copying results");
-
-	if (cudaSuccess!=cudaMemcpy(hOdd, dOdd, sizeof(int),cudaMemcpyDeviceToHost))
-		 errorexit("Error copying results");
-
-	cudaEventRecord(stop, 0);
-
-    // Wait for the stop event to finish
+    cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
-
-    // Calculate elapsed time
     cudaEventElapsedTime(&milliseconds, start, stop);
 
-	printf("Found %d even numbers \n", *hEven);
-	printf("Found %d odd numbers \n", *hOdd);
-	printf("Found %d total numbers \n", *hEven + *hOdd);
-	printf("Kernel execution time: %.3f ms\n", milliseconds);
-	//Free memory
-	free(hOdd);
-	free(hEven);
-	free(hMatrix);
-		
-	if (cudaSuccess!=cudaFree(dEven))
-		errorexit("Error when deallocating space on the GPU");
-	if (cudaSuccess!=cudaFree(dOdd))
-		errorexit("Error when deallocating space on the GPU");
-	if (cudaSuccess!=cudaFree(dMatrix))
-		errorexit("Error when deallocating space on the GPU");
+    // Print histogram
+    printf("\nHistogram:\n");
+    int sum = 0;
+    for (int i = 0; i < range; i++) {
+        printf("Value %d occurs %d times\n", A + i, hHist[i]);
+        sum += hHist[i];
+    }
+
+    printf("\nTotal numbers counted: %d\n", sum);
+    printf("Kernel execution time: %.3f ms\n", milliseconds);
+
+    // Free memory
+    free(hData);
+    free(hHist);
+
+    if (cudaSuccess != cudaFree(dData))
+        errorexit("Error freeing dData");
+
+    if (cudaSuccess != cudaFree(dHist))
+        errorexit("Error freeing dHist");
+
+    return 0;
 }
