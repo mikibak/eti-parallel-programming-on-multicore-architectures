@@ -2,136 +2,206 @@
 #include <cstdlib>
 #include <algorithm>
 
-#undef max
-#undef min
+#define BLOCK_SIZE 1024          // Threads per block in phase 1
+#define ELEMENTS_PER_BLOCK 2048  // Each block sorts 2048 elements
 
-typedef int idx_t;
-
-// -----------------------------------------------------------------------------
-// Merge path partitioning function (Green's algorithm)
-// -----------------------------------------------------------------------------
-__device__ idx_t merge_path_search(
-    idx_t diag,
-    const int* A, idx_t a_len,
-    const int* B, idx_t b_len)
+// ============================================================================
+// CPU helper for debugging
+// ============================================================================
+bool checkSorted(int* arr, int n)
 {
-    // search range
-    idx_t lo = max((idx_t)0, diag - b_len);
-    idx_t hi = min(diag, a_len);
+    for (int i = 0; i < n - 1; i++)
+        if (arr[i] > arr[i + 1])
+            return false;
+    return true;
+}
 
-    while (lo < hi) {
-        idx_t mid = (lo + hi) >> 1;
-        int a = A[mid];
-        int b = B[diag - mid - 1];
+// ============================================================================
+// DEVICE FUNCTION: Merge two sorted subarrays
+//
+// Merges array[l..mid] and array[mid+1..r] into a temp buffer
+// and copies result back into array.
+//
+// This is a simple sequential merge — but because each thread merges
+// a different interval, the merges are parallel at the grid level.
+// ============================================================================
+__device__ void merge_gpu(int* array, int l, int mid, int r, int* temp)
+{
+    int i = l;
+    int j = mid + 1;
+    int k = l;
 
-        if (a < b)
-            lo = mid + 1;
+    while (i <= mid && j <= r)
+    {
+        if (array[i] <= array[j])
+            temp[k++] = array[i++];
         else
-            hi = mid;
+            temp[k++] = array[j++];
     }
 
-    return lo;
+    while (i <= mid) temp[k++] = array[i++];
+    while (j <= r)   temp[k++] = array[j++];
+
+    // Copy merged result back to global memory
+    for (int t = l; t <= r; t++)
+        array[t] = temp[t];
 }
 
-// -----------------------------------------------------------------------------
-// Merge kernel using merge-path
-// -----------------------------------------------------------------------------
-__global__ void merge_kernel(
-    const int* A, idx_t a_len,
-    const int* B, idx_t b_len,
-    int* C)
+// ============================================================================
+// KERNEL 1: mergeSortInBlock_gpu
+//
+// Each block sorts exactly 2048 elements.
+//
+// Each block:
+// 1. Loads its 2048 elements from global to shared memory
+// 2. Performs iterative merging inside shared memory:
+//      size = 2, 4, 8, 16, ... 2048
+// 3. Writes the 2048 sorted elements back to global memory
+//
+// This kernel produces n/2048 sorted blocks.
+// ============================================================================
+__global__ void mergeSortInBlock_gpu(int* array, int n)
 {
-    idx_t total = a_len + b_len;
+    extern __shared__ int sdata[];  // shared memory buffer (size = 2048 ints)
 
-    idx_t tid = threadIdx.x + blockIdx.x * blockDim.x;
-    idx_t tcount = blockDim.x * gridDim.x;
+    int blockStart = blockIdx.x * ELEMENTS_PER_BLOCK;
+    if (blockStart >= n) return;
 
-    // Number of items per thread (parallel merge)
-    for (idx_t diag = tid; diag < total; diag += tcount)
+    // Copy the block's elements to shared memory
+    for (int i = threadIdx.x; i < ELEMENTS_PER_BLOCK; i += blockDim.x)
     {
-        idx_t i = merge_path_search(diag, A, a_len, B, b_len);
-        idx_t j = diag - i;
-
-        int a_val = (i < a_len) ? A[i] : INT_MAX;
-        int b_val = (j < b_len) ? B[j] : INT_MAX;
-
-        C[diag] = (a_val <= b_val ? a_val : b_val);
+        if (blockStart + i < n)
+            sdata[i] = array[blockStart + i];
+        else
+            sdata[i] = 2147483647;  // pad with large sentinel
     }
-}
+    __syncthreads();
 
-// -----------------------------------------------------------------------------
-// Host function: merge sort driver (iterative, bottom-up)
-// -----------------------------------------------------------------------------
-void gpu_merge_sort(int* data, idx_t N)
-{
-    int *d_in, *d_out;
-    cudaMalloc(&d_in,  N * sizeof(int));
-    cudaMalloc(&d_out, N * sizeof(int));
-
-    cudaMemcpy(d_in, data, N * sizeof(int), cudaMemcpyHostToDevice);
-
-    const int BLOCK = 256;
-    const int GRID  = 256;
-
-    for (idx_t L = 1; L < N; L <<= 1)
+    // Iterative merge: 2 → 4 → 8 → ... → 2048
+    for (int size = 2; size <= ELEMENTS_PER_BLOCK; size <<= 1)
     {
-        idx_t num_pairs = (N + 2*L - 1) / (2*L);
+        int half = size >> 1;
 
-        for (idx_t p = 0; p < num_pairs; ++p)
+        int myStart = threadIdx.x * size;
+        int l = myStart;
+        int r = myStart + size - 1;
+
+        if (r < ELEMENTS_PER_BLOCK)
         {
-            idx_t a0 = p * (2 * L);
-            idx_t b0 = a0 + L;
+            int mid = l + half - 1;
 
-            idx_t a_len = min(L, N - a0);
-            idx_t b_len = (b0 < N) ? min(L, N - b0) : 0;
+            // Each thread merges two sorted halves inside shared memory
+            int tempL = l;
+            int tempR = r;
 
-            if (b_len == 0) {
-                cudaMemcpyAsync(
-                    d_out + a0,
-                    d_in + a0,
-                    a_len * sizeof(int),
-                    cudaMemcpyDeviceToDevice);
-                continue;
-            }
+            __syncthreads();
 
-            merge_kernel<<<GRID, BLOCK>>>(
-                d_in + a0, a_len,
-                d_in + b0, b_len,
-                d_out + a0
-            );
+            int i = l;
+            int j = mid + 1;
+            int k = l;
+
+            __syncthreads();
+
+            // Local merge into a temporary shared buffer region (reuse top half)
+            while (i <= mid && j <= r)
+                sdata[k++] = (sdata[i] <= sdata[j]) ? sdata[i++] : sdata[j++];
+            while (i <= mid) sdata[k++] = sdata[i++];
+            while (j <= r)   sdata[k++] = sdata[j++];
         }
 
-        cudaDeviceSynchronize();
-        std::swap(d_in, d_out);
+        __syncthreads();
     }
 
-    cudaMemcpy(data, d_in, N * sizeof(int), cudaMemcpyDeviceToHost);
-    cudaFree(d_in);
-    cudaFree(d_out);
+    // Write sorted block to global memory
+    for (int i = threadIdx.x; i < ELEMENTS_PER_BLOCK; i += blockDim.x)
+    {
+        if (blockStart + i < n)
+            array[blockStart + i] = sdata[i];
+    }
 }
 
-// -----------------------------------------------------------------------------
-// Main Test
-// -----------------------------------------------------------------------------
+// ============================================================================
+// KERNEL 2: mergeSortInGrid_gpu
+//
+// After phase 1, the array consists of (n/2048) sorted blocks.
+//
+// Now the grid has 1 block and (n/2048) threads.
+// Each thread merges two sorted blocks at a time.
+//
+// Iteration structure:
+// size = 1 block, 2 blocks, 4 blocks, 8 blocks, ...
+//
+// Thread t merges:
+//   [t * size * 2048 ... (t*size + size)*2048 - 1]
+//
+// ============================================================================
+__global__ void mergeSortInGrid_gpu(int* array, int n, int threads_in_block)
+{
+    extern __shared__ int temp[];
+
+    int numBlocks = n / ELEMENTS_PER_BLOCK;
+    int tid = threadIdx.x;
+
+    // Each iteration merges "size" blocks
+    for (int size = 1; size < numBlocks; size <<= 1)
+    {
+        int startBlock = tid * (size * 2);
+        if (startBlock + size < numBlocks)
+        {
+            int l = startBlock * ELEMENTS_PER_BLOCK;
+            int mid = l + size * ELEMENTS_PER_BLOCK - 1;
+            int r = l + 2 * size * ELEMENTS_PER_BLOCK - 1;
+
+            if (r >= n) r = n - 1;
+
+            merge_gpu(array, l, mid, r, temp);
+        }
+
+        __syncthreads();
+    }
+}
+
+// ============================================================================
+// HOST FUNCTION: mergeSort_gpu
+// ============================================================================
+void mergeSort_gpu(int* d_array, int n)
+{
+    int numBlocks = n / ELEMENTS_PER_BLOCK;
+
+    size_t shared1 = ELEMENTS_PER_BLOCK * sizeof(int);
+    mergeSortInBlock_gpu<<<numBlocks, BLOCK_SIZE, shared1>>>(d_array, n);
+    cudaDeviceSynchronize();
+
+    size_t shared2 = n * sizeof(int);
+    mergeSortInGrid_gpu<<<1, numBlocks, shared2>>>(d_array, n, BLOCK_SIZE);
+    cudaDeviceSynchronize();
+}
+
+// ============================================================================
+// MAIN
+// ============================================================================
 int main()
 {
-    const int N = 1 << 20;
-    int* arr = new int[N];
+    const int N = 1 << 20; // 1M elements
 
-    for (int i = 0; i < N; ++i)
-        arr[i] = rand();
+    int* h = (int*)malloc(N * sizeof(int));
+    for (int i = 0; i < N; i++) h[i] = rand();
+
+    int* d;
+    cudaMalloc(&d, N * sizeof(int));
+    cudaMemcpy(d, h, N * sizeof(int), cudaMemcpyHostToDevice);
 
     printf("Sorting...\n");
-    gpu_merge_sort(arr, N);
+    mergeSort_gpu(d, N);
 
-    for (int i = 1; i < N; ++i) {
-        if (arr[i] < arr[i-1]) {
-            printf("ERROR: array not sorted at index %d\n", i);
-            return 1;
-        }
-    }
+    cudaMemcpy(h, d, N * sizeof(int), cudaMemcpyDeviceToHost);
 
-    printf("OK: sorted successfully!\n");
-    delete[] arr;
+    if (checkSorted(h, N))
+        printf("OK: Array is sorted.\n");
+    else
+        printf("ERROR: Array is NOT sorted!\n");
+
+    cudaFree(d);
+    free(h);
     return 0;
 }
