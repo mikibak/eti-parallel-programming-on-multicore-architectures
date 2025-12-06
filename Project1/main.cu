@@ -182,7 +182,7 @@ void mergeSort_gpu(int* d_array, int n)
 // ============================================================================
 int main()
 {
-    const int N = 1 << 5;
+    const int N = 1 << 20; // 1M elements
 
     int* h = (int*)malloc(N * sizeof(int));
     for (int i = 0; i < N; i++) h[i] = rand();
