@@ -4,14 +4,11 @@
 #include <cuda.h>
 
 #define BLOCK_SIZE 1024
-#define ELEMENTS_PER_BLOCK 2048       // sorted per block
-#define NSTREAMS 4                    // parallel CPU→GPU + GPU kernels
+#define ELEMENTS_PER_BLOCK 2048
+#define NSTREAMS 4
 
 using idx_t = int;
 
-// ================================================================
-// CPU check
-// ================================================================
 bool checkSorted(int* arr, idx_t n)
 {
     for (idx_t i = 0; i < n - 1; i++)
@@ -19,10 +16,8 @@ bool checkSorted(int* arr, idx_t n)
     return true;
 }
 
-// ================================================================
-// Local merge inside shared memory
-// ================================================================
-__device__ void mergeShared(int* src, int* dst, int start, int mid, int end)
+__device__ 
+void mergeShared(int* src, int* dst, int start, int mid, int end)
 {
     int i = start, j = mid + 1, k = start;
     while (i <= mid && j <= end) dst[k++] = (src[i] <= src[j]) ? src[i++] : src[j++];
@@ -30,10 +25,8 @@ __device__ void mergeShared(int* src, int* dst, int start, int mid, int end)
     while (j <= end) dst[k++] = src[j++];
 }
 
-// ================================================================
-// In-block merging (sort 2048 elements)
-// ================================================================
-__global__ void mergeSortInBlock(int* array, idx_t blockElems)
+__global__ 
+void mergeSortInBlock(int* array, idx_t blockElems)
 {
     __shared__ int ping[ELEMENTS_PER_BLOCK];
     __shared__ int pong[ELEMENTS_PER_BLOCK];
@@ -64,10 +57,8 @@ __global__ void mergeSortInBlock(int* array, idx_t blockElems)
         array[i] = src[i];
 }
 
-// ================================================================
-// Merge sorted blocks globally
-// ================================================================
-__global__ void mergeBlockPairs(int* arr, int* temp, int n, int intervalBlocks)
+__global__ 
+void mergeBlockPairs(int* arr, int* temp, int n, int intervalBlocks)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -94,12 +85,8 @@ __global__ void mergeBlockPairs(int* arr, int* temp, int n, int intervalBlocks)
     for (int t = L; t <= R; t++) arr[t] = temp[t];
 }
 
-// ================================================================
-// GPU merge sort with stream overlap
-// ================================================================
 void mergeSort_gpu_streamed(int* h, idx_t n)
 {
-    // Create pinned memory for async transfers
     int* h_pinned;
     cudaMallocHost(&h_pinned, n * sizeof(int));
     memcpy(h_pinned, h, n * sizeof(int));
@@ -107,21 +94,17 @@ void mergeSort_gpu_streamed(int* h, idx_t n)
     int* d_full;
     cudaMalloc(&d_full, n * sizeof(int));
 
-    // Create streams
     cudaStream_t streams[NSTREAMS];
     for (int i = 0; i < NSTREAMS; i++)
         cudaStreamCreate(&streams[i]);
 
     int numBlocks = (n + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK;
 
-    // Allocate per-block memory on GPU
     int* d_blocks[NSTREAMS];
     for (int i = 0; i < NSTREAMS; i++)
         cudaMalloc(&d_blocks[i], ELEMENTS_PER_BLOCK * sizeof(int));
 
-    // ========================
-    // Phase 1: streaming copies + per-block sorting
-    // ========================
+    // phase 1: per-block sort
     for (int block = 0; block < numBlocks; block++)
     {
         int streamId = block % NSTREAMS;
@@ -141,7 +124,6 @@ void mergeSort_gpu_streamed(int* h, idx_t n)
             d_blocks[streamId], size
         );
 
-        // copy block back into final device array
         cudaMemcpyAsync(
             d_full + offset,
             d_blocks[streamId],
@@ -151,12 +133,9 @@ void mergeSort_gpu_streamed(int* h, idx_t n)
         );
     }
 
-    // Sync all streams
     cudaDeviceSynchronize();
 
-    // ========================
-    // Phase 2: global merging using streams
-    // ========================
+    // phase 2: global merging
     int* d_temp;
     cudaMalloc(&d_temp, n * sizeof(int));
 
@@ -174,10 +153,8 @@ void mergeSort_gpu_streamed(int* h, idx_t n)
         intervalBlocks <<= 1;
     }
 
-    // Copy final back
     cudaMemcpy(h, d_full, n * sizeof(int), cudaMemcpyDeviceToHost);
 
-    // Cleanup
     cudaFree(d_temp);
     cudaFree(d_full);
 
@@ -190,9 +167,6 @@ void mergeSort_gpu_streamed(int* h, idx_t n)
     cudaFreeHost(h_pinned);
 }
 
-// ================================================================
-// MAIN
-// ================================================================
 int main()
 {
     idx_t N;
@@ -200,15 +174,54 @@ int main()
     scanf("%d", &N);
 
     int* arr = (int*)malloc(N * sizeof(int));
-    for (idx_t i = 0; i < N; i++) arr[i] = rand();
+    int* backup = (int*)malloc(N * sizeof(int));
 
-    mergeSort_gpu_streamed(arr, N);
+    float times[10];
 
-    if (checkSorted(arr, N))
-        printf("OK: Array sorted.\n");
-    else
-        printf("ERROR: Array NOT sorted.\n");
+    for (int r = 0; r < 10; r++)
+    {
+        for (idx_t i = 0; i < N; i++) backup[i] = rand();
+        memcpy(arr, backup, N * sizeof(int));
+
+        cudaEvent_t start, stop;
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+
+        cudaEventRecord(start);
+        mergeSort_gpu_streamed(arr, N);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+
+        float ms;
+        cudaEventElapsedTime(&ms, start, stop);
+        times[r] = ms;
+
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+
+        if (!checkSorted(arr, N))
+        {
+            printf("ERROR: Array NOT sorted!\n");
+            return 0;
+        }
+        printf("Sorted array for run %d\n", r + 1);
+    }
+
+    float sum = 0, tmin = times[0], tmax = times[0];
+    for (int i = 0; i < 10; i++)
+    {
+        sum += times[i];
+        tmin = std::min(tmin, times[i]);
+        tmax = std::max(tmax, times[i]);
+    }
+
+    float mean = sum / 10.0f;
+    float uncertainty = (tmax - tmin) / 2.0f;
+
+    printf("\nAverage time over 10 runs: %.3f ms\n", mean);
+    printf("Uncertainty (Tmax-Tmin)/2: ± %.3f ms\n", uncertainty);
 
     free(arr);
+    free(backup);
     return 0;
 }
