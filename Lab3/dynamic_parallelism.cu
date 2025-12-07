@@ -23,8 +23,6 @@ __device__ void swap(int *a, int *b) {
 }
 
 __global__ void cdp_quicksort(int *data, int left, int right, int depth) {
-    // 1. Depth Safety Check
-    // If we hit this, the sort stops prematurely. We must warn the user.
     if (depth >= MAX_DEPTH) {
         if (threadIdx.x == 0) printf("ERROR: Max depth reached at index %d. Increase MAX_DEPTH.\n", left);
         return;
@@ -80,7 +78,7 @@ __global__ void cdp_quicksort(int *data, int left, int right, int depth) {
 int main(int argc, char **argv) {
     int N;
     printf("Enter number of elements: ");
-    if(scanf("%d", &N) != 1) N = 1024; // Default if input fails
+    if(scanf("%d", &N) != 1) N = 1024;
 
     int *h_data = (int *)malloc(N * sizeof(int));
     int *d_data;
@@ -93,24 +91,10 @@ int main(int argc, char **argv) {
     cudaCheckError(cudaMalloc((void **)&d_data, N * sizeof(int)));
     cudaCheckError(cudaMemcpy(d_data, h_data, N * sizeof(int), cudaMemcpyHostToDevice));
 
-    // --- CRITICAL CONFIGURATION START ---
-
-    // 1. Increase Stack Size
-    // Default is usually 1KB. Recursion requires significantly more stack per thread
-    // to store return addresses and local variables for every nested call.
-    // We set this to 8KB per thread.
     cudaCheckError(cudaDeviceSetLimit(cudaLimitStackSize, 8192));
-
-    // 2. Pending Launch Count
-    // If N is large, we might queue thousands of kernels before they execute.
-    // The default is usually small (e.g., 2048).
+    // queue kernels before they execute.
     cudaCheckError(cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 32768)); 
-
-    // 3. Sync Depth
-    // How deep the grid synchronization can go.
     cudaCheckError(cudaDeviceSetLimit(cudaLimitDevRuntimeSyncDepth, MAX_DEPTH));
-
-    // --- CRITICAL CONFIGURATION END ---
 
     cudaEvent_t start, stop;
     cudaCheckError(cudaEventCreate(&start));
@@ -129,9 +113,7 @@ int main(int argc, char **argv) {
     cudaCheckError(cudaEventElapsedTime(&milliseconds, start, stop));
     printf("Execution Time: %.5f ms\n", milliseconds);
 
-    // This catches errors in the Parent kernel, but NOT the children
     cudaCheckError(cudaGetLastError());
-
     cudaCheckError(cudaMemcpy(h_data, d_data, N * sizeof(int), cudaMemcpyDeviceToHost));
 
     int correct = 1;
