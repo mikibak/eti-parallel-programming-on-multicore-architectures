@@ -16,73 +16,73 @@ bool checkSorted(int* arr, idx_t n)
     return true;
 }
 
-__device__ 
-void mergeShared(int* src, int* dst, int start, int mid, int end)
+__device__
+void mergeShared(int* src, int* dst, idx_t start, idx_t mid, idx_t end)
 {
-    int i = start, j = mid + 1, k = start;
+    idx_t i = start, j = mid + 1, k = start;
     while (i <= mid && j <= end) dst[k++] = (src[i] <= src[j]) ? src[i++] : src[j++];
     while (i <= mid) dst[k++] = src[i++];
     while (j <= end) dst[k++] = src[j++];
 }
 
-__global__ 
+__global__
 void mergeSortInBlock(int* array, idx_t blockElems)
 {
     __shared__ int ping[ELEMENTS_PER_BLOCK];
     __shared__ int pong[ELEMENTS_PER_BLOCK];
 
-    int tid = threadIdx.x;
+    idx_t tid = threadIdx.x;
 
-    for (int i = tid; i < blockElems; i += blockDim.x)
+    for (idx_t i = tid; i < blockElems; i += blockDim.x)
         ping[i] = array[i];
     __syncthreads();
 
     int* src = ping;
     int* dst = pong;
 
-    for (int size = 1; size < blockElems; size <<= 1)
+    for (idx_t size = 1; size < blockElems; size <<= 1)
     {
-        int interval = size * 2;
-        for (int start = tid * interval; start < blockElems; start += blockDim.x * interval)
+        idx_t interval = size * 2;
+        for (idx_t start = tid * interval; start < blockElems; start += (idx_t)blockDim.x * interval)
         {
-            int mid = min(start + size - 1, blockElems - 1);
-            int end = min(start + interval - 1, blockElems - 1);
+            idx_t mid = min(start + size - 1, blockElems - 1);
+            idx_t end = min(start + interval - 1, blockElems - 1);
             mergeShared(src, dst, start, mid, end);
         }
         __syncthreads();
         int* tmp = src; src = dst; dst = tmp;
     }
 
-    for (int i = tid; i < blockElems; i += blockDim.x)
+    for (idx_t i = tid; i < blockElems; i += blockDim.x)
         array[i] = src[i];
 }
 
-__global__ 
-void mergeBlockPairs(int* arr, int* temp, int n, int intervalBlocks)
+__global__
+void mergeBlockPairs(int* arr, int* temp, idx_t n, idx_t intervalBlocks)
 {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    idx_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    int blocksPerMerge = intervalBlocks * 2;
-    int startBlock     = tid * blocksPerMerge;
+    idx_t blocksPerMerge = intervalBlocks * 2;
+    idx_t startBlock     = tid * blocksPerMerge;
 
-    int totalBlocks = (n + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK;
+    idx_t totalBlocks = (n + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK;
     if (startBlock >= totalBlocks) return;
 
-    int LB = startBlock;
-    int RB = startBlock + intervalBlocks;
+    idx_t LB = startBlock;
+    idx_t RB = startBlock + intervalBlocks;
     if (RB >= totalBlocks) return;
 
-    int L = LB * ELEMENTS_PER_BLOCK;
-    int M = min(RB * ELEMENTS_PER_BLOCK - 1, n - 1);
-    int R = min((startBlock + blocksPerMerge) * ELEMENTS_PER_BLOCK - 1, n - 1);
+    idx_t L = LB * ELEMENTS_PER_BLOCK;
+    idx_t M = min(RB * ELEMENTS_PER_BLOCK - 1, n - 1);
+    idx_t R = min((startBlock + blocksPerMerge) * ELEMENTS_PER_BLOCK - 1, n - 1);
 
-    int i = L, j = M + 1, k = L;
+    idx_t i = L, j = M + 1, k = L;
 
     while (i <= M && j <= R) temp[k++] = (arr[i] <= arr[j]) ? arr[i++] : arr[j++];
     while (i <= M) temp[k++] = arr[i++];
     while (j <= R) temp[k++] = arr[j++];
 
-    for (int t = L; t <= R; t++) arr[t] = temp[t];
+    for (idx_t t = L; t <= R; t++) arr[t] = temp[t];
 }
 
 void mergeSort_gpu_streamed(int* h, idx_t n)
@@ -98,19 +98,19 @@ void mergeSort_gpu_streamed(int* h, idx_t n)
     for (int i = 0; i < NSTREAMS; i++)
         cudaStreamCreate(&streams[i]);
 
-    int numBlocks = (n + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK;
+    idx_t numBlocks = (n + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK;
 
     int* d_blocks[NSTREAMS];
     for (int i = 0; i < NSTREAMS; i++)
         cudaMalloc(&d_blocks[i], ELEMENTS_PER_BLOCK * sizeof(int));
 
     // phase 1: per-block sort
-    for (int block = 0; block < numBlocks; block++)
+    for (idx_t block = 0; block < numBlocks; block++)
     {
         int streamId = block % NSTREAMS;
 
-        int offset = block * ELEMENTS_PER_BLOCK;
-        int size   = min(ELEMENTS_PER_BLOCK, n - offset);
+        idx_t offset = block * ELEMENTS_PER_BLOCK;
+        idx_t size   = min((idx_t)ELEMENTS_PER_BLOCK, n - offset);
 
         cudaMemcpyAsync(
             d_blocks[streamId],
@@ -139,11 +139,11 @@ void mergeSort_gpu_streamed(int* h, idx_t n)
     int* d_temp;
     cudaMalloc(&d_temp, n * sizeof(int));
 
-    int intervalBlocks = 1;
+    idx_t intervalBlocks = 1;
 
     while (intervalBlocks < numBlocks)
     {
-        int merges = (numBlocks + 2 * intervalBlocks - 1) / (2 * intervalBlocks);
+        idx_t merges = (numBlocks + 2 * intervalBlocks - 1) / (2 * intervalBlocks);
         int threads = 256;
         int blocks  = (merges + threads - 1) / threads;
 
