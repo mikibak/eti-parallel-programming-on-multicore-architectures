@@ -61,29 +61,58 @@ int is_sorted(int *arr, int n)
 }
 
 
+
 int main(int argc, char **argv)
 {
     int n = 0;
     printf("Enter the array size:\n");
     int scan_res = scanf("%d", &n);
     int *arr = (int *)malloc(n * sizeof(int));
+    int *backup = (int *)malloc(n * sizeof(int));
 
-    for (int i = 0; i < n; i++)
-        arr[i] = rand();
+    double times[10];
 
-    double start = omp_get_wtime();
-
-    #pragma omp parallel
+    for (int r = 0; r < 10; r++)
     {
-        #pragma omp single
-        merge_sort(arr, 0, n - 1);
+        for (int i = 0; i < n; i++) backup[i] = rand();
+        for (int i = 0; i < n; i++) arr[i] = backup[i];
+
+        double start = omp_get_wtime();
+
+        #pragma omp parallel
+        {
+            #pragma omp single
+            merge_sort(arr, 0, n - 1);
+        }
+
+        double end = omp_get_wtime();
+        times[r] = end - start;
+
+        if (!is_sorted(arr, n))
+        {
+            printf("ERROR: Array NOT sorted!\n");
+            free(arr);
+            free(backup);
+            return 1;
+        }
+        printf("Sorted array for run %d\n", r + 1);
     }
 
-    double end = omp_get_wtime();
+    double sum = 0, tmin = times[0], tmax = times[0];
+    for (int i = 0; i < 10; i++)
+    {
+        sum += times[i];
+        if (times[i] < tmin) tmin = times[i];
+        if (times[i] > tmax) tmax = times[i];
+    }
 
-    printf("Time: %f seconds\n", end - start);
-    printf("Sorted: %s\n", is_sorted(arr, n) ? "YES" : "NO");
+    double mean = sum / 10.0;
+    double uncertainty = (tmax - tmin) / 2.0;
+
+    printf("\nAverage time over 10 runs: %.6f seconds\n", mean);
+    printf("Uncertainty (Tmax-Tmin)/2: ± %.6f seconds\n", uncertainty);
 
     free(arr);
+    free(backup);
     return 0;
 }
