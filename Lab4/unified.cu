@@ -30,27 +30,40 @@ void check_prime(int n, int *is_prime) {
 
 
 int main(int argc, char **argv) {
-    int n = 0;
-    printf("Enter a number for prime check:\n");
-    scanf("%d", &n);
+  int n = 0;
+  printf("Enter a number for prime check:\n");
+  scanf("%d", &n);
     
-    int threadsinblock = 1024;
-    int max_divisor = n / 2;
-    int blocksingrid = (max_divisor + threadsinblock - 1) / threadsinblock;
+  int threadsinblock = 1024;
+  int max_divisor = n / 2;
+  int blocksingrid = (max_divisor + threadsinblock - 1) / threadsinblock;
 
-    int *is_prime;
-    cudaCheckError(cudaMallocManaged(&is_prime, sizeof(int)));
-    *is_prime = 1;
+  int *is_prime;
+  cudaCheckError(cudaMallocManaged(&is_prime, sizeof(int)));
+  *is_prime = 1;
 
-    check_prime<<<blocksingrid, threadsinblock>>>(n, is_prime);
-    cudaCheckError(cudaGetLastError());
+  cudaEvent_t start, stop;
+  float milliseconds = 0;
+  cudaCheckError(cudaEventCreate(&start));
+  cudaCheckError(cudaEventCreate(&stop));
 
-    cudaDeviceSynchronize();
+  cudaCheckError(cudaEventRecord(start, 0));
+  check_prime<<<blocksingrid, threadsinblock>>>(n, is_prime);
+  cudaCheckError(cudaGetLastError());
+  cudaCheckError(cudaEventRecord(stop, 0));
+  cudaCheckError(cudaEventSynchronize(stop));
+  cudaCheckError(cudaEventElapsedTime(&milliseconds, start, stop));
 
-    if (*is_prime)
-        printf("\n%d is a prime number.\n", n);
-    else
-        printf("\n%d is NOT a prime number.\n", n);
+  cudaDeviceSynchronize();
 
-    cudaCheckError(cudaFree(is_prime));
+  if (*is_prime)
+    printf("\n%d is a prime number.\n", n);
+  else
+    printf("\n%d is NOT a prime number.\n", n);
+
+  printf("Kernel execution time: %.3f ms\n", milliseconds);
+
+  cudaCheckError(cudaFree(is_prime));
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
 }
