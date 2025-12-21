@@ -63,7 +63,9 @@ int is_sorted(int *arr, int n)
 
 int main(int argc, char **argv)
 {
-    int n = 1000000;
+    int n = 0;
+    printf("Enter the array size:\n");
+    int scan_res = scanf("%d", &n);
     int *arr = (int *)malloc(n * sizeof(int));
 
     for (int i = 0; i < n; i++)
