@@ -32,6 +32,7 @@ void sort(int* arr, int n) {
         // merge one level
         int num_merges = (n + 2 * width - 1) / (2 * width);
 
+        // computational cost of merging each fragment should be similar
         #pragma omp parallel for schedule(static)
         for (int i = 0; i < num_merges; i++) {
             int left = i * 2 * width;

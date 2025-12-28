@@ -12,7 +12,6 @@ int is_sorted(int *arr, int n)
 }
 
 
-
 #define MIN_PARALLEL_SIZE 10000
 
 void merge(int* arr, int l, int m, int r, int* temp) {
@@ -25,6 +24,7 @@ void merge(int* arr, int l, int m, int r, int* temp) {
     while (j < r) temp[k++] = arr[j++];
     for (i = l; i < r; i++) arr[i] = temp[i];
 }
+
 
 void mergesort_parallel(int* arr, int l, int r, int* temp) {
     if (r - l <= 32) { // insertion sort for small arrays
@@ -40,19 +40,23 @@ void mergesort_parallel(int* arr, int l, int r, int* temp) {
         return;
     }
     int m = l + (r - l) / 2;
-#pragma omp task shared(arr, temp) if(r-l > MIN_PARALLEL_SIZE)
+
+    #pragma omp task shared(arr, temp) if(r-l > MIN_PARALLEL_SIZE)
     mergesort_parallel(arr, l, m, temp);
-#pragma omp task shared(arr, temp) if(r-l > MIN_PARALLEL_SIZE)
+
+    #pragma omp task shared(arr, temp) if(r-l > MIN_PARALLEL_SIZE)
     mergesort_parallel(arr, m, r, temp);
-#pragma omp taskwait
+
+    #pragma omp taskwait
     merge(arr, l, m, r, temp);
 }
 
 void sort(int* arr, int n) {
     int* temp = (int*)malloc(n * sizeof(int));
-#pragma omp parallel
+
+    #pragma omp parallel
     {
-#pragma omp single nowait
+        #pragma omp single nowait
         mergesort_parallel(arr, 0, n, temp);
     }
     free(temp);
