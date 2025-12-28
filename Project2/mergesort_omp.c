@@ -110,11 +110,12 @@ int main(int argc, char **argv)
         if (times[i] > tmax) tmax = times[i];
     }
 
-    double mean = sum / 10.0;
-    double uncertainty = (tmax - tmin) / 2.0;
 
-    printf("\nAverage time over 10 runs: %.6f seconds\n", mean);
-    printf("Uncertainty (Tmax-Tmin)/2: ± %.6f seconds\n", uncertainty);
+    double mean = sum / 10.0 * 1000.0; // ms
+    double uncertainty = (tmax - tmin) / 2.0 * 1000.0; // ms
+
+    printf("\nAverage time over 10 runs: %.3f ms\n", mean);
+    printf("Uncertainty (Tmax-Tmin)/2: ± %.3f ms\n", uncertainty);
 
     free(arr);
     free(backup);
