@@ -44,12 +44,13 @@ void sort(int* arr, int n) {
         src = dst;
         dst = tmp;
     }
-    // If the result is in temp, copy back to arr
+    // If the result is in temp, swap the pointers
     if (src != arr) {
-    #pragma omp parallel for schedule(static)
-        for (int i = 0; i < n; i++) arr[i] = temp[i];
+        int* tmp = src;
+        src = dst;
+        dst = tmp;
     }
-    free(temp);
+    free(dst);
 }
 
 
