@@ -61,6 +61,14 @@ int is_sorted(int *arr, int n)
 }
 
 
+void sort(int* arr, int n) {
+    #pragma omp parallel
+    {
+        #pragma omp single
+        merge_sort(arr, 0, n - 1);
+    }
+}
+
 
 int main(int argc, char **argv)
 {
@@ -79,11 +87,7 @@ int main(int argc, char **argv)
 
         double start = omp_get_wtime();
 
-        #pragma omp parallel
-        {
-            #pragma omp single
-            merge_sort(arr, 0, n - 1);
-        }
+        sort(arr, n);
 
         double end = omp_get_wtime();
         times[r] = end - start;
