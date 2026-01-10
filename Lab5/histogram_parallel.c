@@ -18,6 +18,8 @@ int main() {
         array[i] = rand() % MAX_VALUE;
     }
 
+    double start_time = omp_get_wtime();
+
     // use atomic to prevent race conditions
     #pragma omp parallel for
     for (i = 0; i < N; i++) {
@@ -26,6 +28,9 @@ int main() {
         #pragma omp atomic
         histogram[bin]++;
     }
+
+    double end_time = omp_get_wtime();
+    printf("\nHistogram computation time: %f seconds\n", end_time - start_time);
 
     // Print histogram
     int total = 0;
