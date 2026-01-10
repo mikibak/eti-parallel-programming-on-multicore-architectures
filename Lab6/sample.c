@@ -3,57 +3,63 @@
 #include <omp.h>
 #include <math.h>
 
-#define TOTAL_TH 39 //sum of power of three - 3^1 + 3^2 + 3^3
 
+void quicksort_parallel(int *arr, int left, int right, int depth) {
+  if (left < right) {
+    int i = left, j = right;
+    int pivot = arr[(left + right) / 2];
+    while (i <= j) {
+      while (arr[i] < pivot) i++;
+      while (arr[j] > pivot) j--;
+      if (i <= j) {
+        int tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+        i++;
+        j--;
+      }
+    }
+    // Limit nesting depth to avoid oversubscription
+    if (depth < 3) {
+      #pragma omp parallel sections
+      {
+        #pragma omp section
+        quicksort_parallel(arr, left, j, depth + 1);
+        #pragma omp section
+        quicksort_parallel(arr, i, right, depth + 1);
+      }
+    } else {
+      quicksort_parallel(arr, left, j, depth + 1);
+      quicksort_parallel(arr, i, right, depth + 1);
+    }
+  }
+}
 
-void dynamic_deeper(int depth, int father) {
+int main(int argc, char **argv) {
+  omp_set_nested(1);
+  omp_set_dynamic(0);
 
-  double max = 0;
-  int threadid, j;
+  int n = 20;
+  int arr[20];
 
-//how many branches are at this level - maximum active threads at this level
-  for(j=1;j<=depth; j++) {
-    max += pow((double)3, (double)j);
+  #pragma omp parallel
+  {
+    #pragma omp single
+    quicksort_parallel(arr, 0, n - 1, 0);
   }
 
-//if current active thread number is higher than max value 3^1 + 3^2 + 3^3 = 39 - depth of nested calls is 3 
-  if(max < TOTAL_TH) {
-    int myDepth, myFather;
-    //parallel - according to num_threads - 3 threads will work in parallel
-    #pragma omp parallel private(myFather, myDepth, threadid) num_threads(3)
-    {
-      myDepth = depth;
-      threadid = omp_get_thread_num();
-      int i =0;
-
-      //critical to ensure that output will be correctly printed
-      #pragma omp critical 
-      {
-        for(i;i<myDepth;i++){
-          printf("\t");
-        }
-        printf("Depth %d in child threadid %d with father threadid %d \n",myDepth, threadid, father);
-      }
-
-      myDepth++;
-      myFather = threadid;
-      dynamic_deeper(myDepth, father);
+  // Validate if array is sorted
+  int sorted = 1;
+  for (int i = 1; i < n; i++) {
+    if (arr[i-1] > arr[i]) {
+      sorted = 0;
+      break;
     }
-  } 
-}
-
-int main(int argc,char **argv) {
-
-  omp_set_nested(1); //enables nested parallelism
-  omp_set_dynamic(0); //disable dynamic setting for number of threads
-  
-  int threadid;
-//parallel - according to num_threads - 3 threads will work in parallel
-#pragma omp parallel private(threadid) num_threads(3)
-{
-  threadid=omp_get_thread_num();
-  printf("Level 0 - threadid %d \n",threadid);
-  dynamic_deeper(1, threadid);
-}
-
+  }
+  if (sorted) {
+    printf("Array is sorted correctly.\n");
+  } else {
+    printf("Array is NOT sorted!\n");
+  }
+  return 0;
 }
