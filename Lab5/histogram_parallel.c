@@ -3,12 +3,22 @@
 #include <omp.h>
 #include <assert.h>
 
-#define N 1000000
 #define NUM_BINS 10
 #define MAX_VALUE 100
 
 int main() {
+    int N;
+    printf("Enter array size N: ");
+    if (scanf("%d", &N) != 1 || N <= 0) {
+        printf("Invalid input.\n");
+        return 1;
+    }
+
     int *array = (int*)malloc(N * sizeof(int));
+    if (!array) {
+        printf("Memory allocation failed.\n");
+        return 1;
+    }
     int histogram[NUM_BINS] = {0};
     int i;
 
