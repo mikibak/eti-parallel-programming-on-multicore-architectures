@@ -39,19 +39,34 @@ int main(int argc, char **argv) {
   omp_set_nested(1);
   omp_set_dynamic(0);
 
-  int n = 20;
-  int arr[20];
+  int N;
+  printf("Enter array size N: ");
+  if (scanf("%d", &N) != 1 || N <= 0) {
+      printf("Invalid input.\n");
+      return 1;
+  } 
+  int *array = (int*)malloc(N * sizeof(int));
+  if (!array) {
+      printf("Memory allocation failed.\n");
+      return 1;
+  }
+
+  double start_time = omp_get_wtime();
 
   #pragma omp parallel
   {
     #pragma omp single
-    quicksort_parallel(arr, 0, n - 1, 0);
+    quicksort_parallel(array, 0, N - 1, 0);
   }
+
+  double end_time = omp_get_wtime();
+  printf("\nQuicksort computation time: %f seconds\n", end_time - start_time);
+
 
   // Validate if array is sorted
   int sorted = 1;
-  for (int i = 1; i < n; i++) {
-    if (arr[i-1] > arr[i]) {
+  for (int i = 1; i < N; i++) {
+    if (array[i-1] > array[i]) {
       sorted = 0;
       break;
     }
