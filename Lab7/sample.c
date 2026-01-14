@@ -14,8 +14,22 @@ int cuda_search_in_chunk(const int *array, int chunk_size, int target);
 
 
 int main(int argc, char **argv) {
-    const int N = 10000000; // 10 million
-    const int NUM_THREADS = 4; // or use omp_get_max_threads()
+    int N;
+    printf("Enter array size N: ");
+    if (scanf("%d", &N) != 1 || N <= 0) {
+        printf("Invalid input.\n");
+        return 1;
+    }
+    
+    int max_threads = omp_get_max_threads();
+    int NUM_THREADS = 4;
+    
+    printf("Enter number of threads, max is %d: ", max_threads);
+    if (scanf("%d", &NUM_THREADS) != 1 || NUM_THREADS <= 0 || NUM_THREADS > max_threads) {
+        printf("Invalid input.\n");
+        return 1;
+    }
+    
     int *array = (int*)malloc(N * sizeof(int));
     if (!array) errorexit("Failed to allocate array");
 
