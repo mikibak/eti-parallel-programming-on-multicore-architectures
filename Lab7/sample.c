@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
         printf("Invalid input.\n");
         return 1;
     }
-    
+
     int *array = (int*)malloc(N * sizeof(int));
     if (!array) errorexit("Failed to allocate array");
 
@@ -42,6 +42,7 @@ int main(int argc, char **argv) {
     printf("Searching for value %d in array of size %d\n", target, N);
 
     int found_index = -1;
+    double start_time = omp_get_wtime();
 
     #pragma omp parallel num_threads(NUM_THREADS)
     {
@@ -62,6 +63,9 @@ int main(int argc, char **argv) {
             }
         }
     }
+
+    double end_time = omp_get_wtime();
+    printf("\nHistogram computation time: %f seconds\n", end_time - start_time);
 
     if (found_index != -1) {
         printf("Found value %d at index %d\n", target, found_index);
